@@ -9,6 +9,7 @@ import os
 import random
 import re
 import uuid
+import time
 from http.cookiejar import Cookie
 
 import requests
@@ -321,6 +322,45 @@ class TreeholeClient:
                 "message": result.get("message", "Unknown error"),
                 "code": result.get("code")
             }
+
+    def _hot_v3_get(self, endpoint, params, request_delay=1.0, max_retries=3):
+        """Bounded read-only requests for mode 4; never log auth or response bodies."""
+        for attempt in range(max_retries):
+            time.sleep(request_delay if attempt == 0 else max(request_delay, min(2 ** attempt, 30)))
+            try:
+                response = self.session.get(
+                    "https://treehole.pku.edu.cn/chapi/api/v3/" + endpoint,
+                    params=params, timeout=(10, 60),
+                )
+                if response.status_code == 429 or response.status_code >= 500:
+                    if attempt + 1 < max_retries:
+                        continue
+                response.raise_for_status()
+                result = response.json()
+            except (requests.Timeout, requests.ConnectionError):
+                if attempt + 1 < max_retries:
+                    continue
+                raise RuntimeError("树洞请求超时或连接失败") from None
+            except (requests.HTTPError, ValueError):
+                raise RuntimeError("树洞 HTTP 或 JSON 响应错误，请检查登录与网络") from None
+            if not isinstance(result, dict) or result.get("code") != 20000:
+                raise RuntimeError("树洞接口业务错误，请检查登录是否过期")
+            if not isinstance(result.get("data"), dict) or not isinstance(result["data"].get("list"), list):
+                raise RuntimeError("树洞接口响应缺少 data.list")
+            return result
+        raise RuntimeError("树洞请求重试次数无效")
+
+    def list_recent_posts(self, page=1, limit=30, **request_options):
+        """Unfiltered listing. Timestamp filtering is performed by the collector."""
+        return self._hot_v3_get("hole/list_comments", {
+            "page": page, "limit": limit, "comment_limit": 10, "comment_stream": 1,
+        }, **request_options)
+
+    def list_hot_comments(self, pid, page=1, limit=30, **request_options):
+        """v3 comments preserve cid, comment_id and quote for reply evidence."""
+        return self._hot_v3_get("comment/list", {
+            "pid": pid, "page": page, "limit": limit, "sort": 0, "comment_stream": 1,
+        }, **request_options)
 
     def save_cookies(self):
         """

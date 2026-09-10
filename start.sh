@@ -24,7 +24,7 @@ echo ""
 
 # 步骤 3: 安装依赖
 echo "步骤 2/5: 安装依赖..."
-pip3 install -q requests
+pip3 install -q -r requirements.txt
 echo "✓ 依赖已安装"
 echo ""
 

@@ -43,12 +43,12 @@ sudo bash deploy_service.sh
 
 1. **安装依赖**
    ```bash
-   pip install requests
+   pip install -r requirements.txt
    ```
 
 2. **配置账号**
    ```bash
-   cp config.py config_private.py
+   cp config_example.py config_private.py
    ```
    
    编辑 `config_private.py`：
@@ -65,7 +65,7 @@ sudo bash deploy_service.sh
 
 ## 功能特性
 
-### 三种智能模式
+### 四种智能模式
 
 #### 模式 1: 手动关键词检索
 - 用户提供关键词 + 问题
@@ -89,6 +89,15 @@ sudo bash deploy_service.sh
 - **智能爬取**: 自动获取帖子的所有评论
 - **智能筛选**: 优先洞主评论，筛选包含课程名的内容
 - **多维分析**: 课程难度、教学质量、考核方式、选课建议等
+
+#### 模式 4: 热点实时推送（单次生成）
+- 运行 `python3 agent.py` 后选择 `4`，默认最近 24 小时，也可选 72 小时或 7 天。
+- 扫描近期全站候选，结合关键词文档频率与收藏、点赞、评论筛选最多 30 帖。
+- 抓取评论并保留具体回复对象与引用，先导出原文 JSON/Markdown，再由 DeepSeek 汇总约 5～10 个话题。
+- 提供评分依据、采集覆盖情况、评论缺失说明和帖子/评论出处。
+- `python3 agent.py --hot-only` 可只导出；`--hot-replay <posts.json>` 可离线重放素材重新总结。
+
+完整算法、配置、验收与调试步骤见 [热点模式说明](docs/HOT_TOPICS.md)。此模式目前仅接入终端。
 
 ### 核心特性
 
