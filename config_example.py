@@ -54,3 +54,27 @@ CACHE_DIR = "data/cache"
 
 # Cache expiration time (seconds), 1 day = 86400
 CACHE_EXPIRATION = 86400
+# ==================== Mode 4: One-shot hot topics ====================
+# Optional: old config_private.py files continue to work without these settings.
+HOT_HOURS = 24                    # 24 / 72 / 168 (7 days)
+HOT_TOP_POSTS = 30                # Final selected posts, NOT the scan size
+HOT_MAX_SCAN_POSTS = 5000          # Partial coverage is reported if this cap is reached
+HOT_MAX_SCAN_PAGES = 200
+HOT_PAGE_SIZE = 30
+HOT_MAX_COMMENT_PAGES = 200       # Per selected post; incomplete collection is marked
+HOT_REQUEST_DELAY = 1.0           # Seconds between v3 requests
+HOT_MAX_RETRIES = 3               # Total attempts, including the first request
+HOT_MIN_KEYWORD_POSTS = 3         # Different posts mentioning a word
+HOT_MIN_FAVORITES = 5             # likenum: favorites (not likes)
+HOT_MIN_LIKES = 3                 # praise_num: likes
+HOT_MIN_COMMENTS = 10
+HOT_HIGH_PERCENTILE = 0.9         # Average rank within positive values of each metric
+HOT_TOPIC_SIMILARITY = 0.25       # TF-IDF cosine threshold for auxiliary grouping
+HOT_OUTPUT_DIR = "data/hot_topics"
+HOT_CONTEXT_CHARS = 18000         # Per model request user-content budget, not token count
+HOT_MAX_SUMMARY_CHUNKS = 40       # Note/reduction call budget, plus one final summary
+HOT_ONLY_EXPORT = False
+
+# Optional model override for mode 4 only (official API defaults to disabled).
+# Non-official API bases omit this field unless explicitly configured.
+# HOT_THINKING = "disabled"        # "enabled" / "disabled" / None (provider default)

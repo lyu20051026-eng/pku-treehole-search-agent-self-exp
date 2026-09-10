@@ -29,42 +29,27 @@ from utils import (
 # Agent debug message prefix
 AGENT_PREFIX = "[Agent] "
 
+# Defaults let old private configurations opt into new settings gradually.
+import config_example as _defaults
 try:
-    from config_private import (
-        USERNAME,
-        PASSWORD,
-        DEEPSEEK_API_KEY,
-        DEEPSEEK_API_BASE,
-        DEEPSEEK_MODEL,
-        MAX_SEARCH_RESULTS,
-        MAX_CONTEXT_POSTS,
-        MAX_COMMENTS_PER_POST,
-        MAX_SEARCH_ITERATIONS,
-        TEMPERATURE,
-        MAX_RESPONSE_TOKENS,
-        SEARCH_DELAY,
-        ENABLE_CACHE,
-        CACHE_DIR,
-        CACHE_EXPIRATION,
-    )
-except ImportError:
-    from config import (
-        USERNAME,
-        PASSWORD,
-        DEEPSEEK_API_KEY,
-        DEEPSEEK_API_BASE,
-        DEEPSEEK_MODEL,
-        MAX_SEARCH_RESULTS,
-        MAX_CONTEXT_POSTS,
-        MAX_COMMENTS_PER_POST,
-        MAX_SEARCH_ITERATIONS,
-        TEMPERATURE,
-        MAX_RESPONSE_TOKENS,
-        SEARCH_DELAY,
-        ENABLE_CACHE,
-        CACHE_DIR,
-        CACHE_EXPIRATION,
-    )
+    import config_private as _config
+except ModuleNotFoundError as exc:
+    if exc.name != 'config_private':
+        raise
+    try:
+        import config as _config
+    except ModuleNotFoundError as fallback_exc:
+        if fallback_exc.name != 'config':
+            raise
+        _config = _defaults
+
+for _name in (
+    'USERNAME', 'PASSWORD', 'DEEPSEEK_API_KEY', 'DEEPSEEK_API_BASE', 'DEEPSEEK_MODEL',
+    'MAX_SEARCH_RESULTS', 'MAX_CONTEXT_POSTS', 'MAX_COMMENTS_PER_POST',
+    'MAX_SEARCH_ITERATIONS', 'TEMPERATURE', 'MAX_RESPONSE_TOKENS', 'SEARCH_DELAY',
+    'ENABLE_CACHE', 'CACHE_DIR', 'CACHE_EXPIRATION',
+):
+    globals()[_name] = getattr(_config, _name, getattr(_defaults, _name))
 
 
 class TreeholeRAGAgent:
@@ -73,15 +58,16 @@ class TreeholeRAGAgent:
     Supports manual and automatic keyword-based retrieval.
     """
 
-    def __init__(self, interactive=True, cookies_file=None):
+    def __init__(self, interactive=True, cookies_file=None, authenticate=True):
         """Initialize the agent with Treehole client and DeepSeek API.
         
         Args:
             interactive (bool): Whether to allow interactive prompts for login verification.
                               Set to False when running as a service.
             cookies_file (str): Path to user-specific cookies file. If None, uses default.
+            authenticate (bool): False skips Treehole client/login for local replay.
         """
-        self.client = TreeholeClient(cookies_file=cookies_file)
+        self.client = TreeholeClient(cookies_file=cookies_file) if authenticate else None
         self.api_key = DEEPSEEK_API_KEY
         self.api_base = DEEPSEEK_API_BASE
         self.model = DEEPSEEK_MODEL
@@ -90,7 +76,9 @@ class TreeholeRAGAgent:
         self.info_callback = None  # Callback for progress/info messages
         
         # Ensure login
-        if not self.client.ensure_login(USERNAME, PASSWORD, interactive=interactive):
+        if authenticate and _config is _defaults:
+            raise RuntimeError("请先复制 config_example.py 为 config_private.py 并填写本地配置")
+        if authenticate and not self.client.ensure_login(USERNAME, PASSWORD, interactive=interactive):
             raise RuntimeError("Failed to login to Treehole. Try running interactively first to save cookies.")
         
         # Create cache directory
@@ -328,7 +316,8 @@ class TreeholeRAGAgent:
         system_message: Optional[str] = None,
         temperature: float = TEMPERATURE,
         stream: bool = True,
-        callback: Optional[callable] = None
+        callback: Optional[callable] = None,
+        strict: bool = False
     ) -> str:
         """
         Call DeepSeek API for chat completion.
@@ -339,10 +328,14 @@ class TreeholeRAGAgent:
             temperature (float): Temperature for generation.
             stream (bool): Whether to use streaming output.
             callback (callable): Optional callback function for streaming chunks.
+            strict (bool): Mode 4 buffers output and raises on failed/incomplete generation.
             
         Returns:
             str: LLM response (accumulated if streaming).
         """
+        if strict:
+            return self._call_deepseek_strict(user_message, system_message, temperature, stream)
+
         messages = []
         
         if system_message:
@@ -417,6 +410,89 @@ class TreeholeRAGAgent:
         except Exception as e:
             print(f"{AGENT_PREFIX}调用 DeepSeek API 时出错: {e}")
             return f"抱歉，调用 DeepSeek API 时出错: {e}"
+
+    def _call_deepseek_strict(self, user_message, system_message, temperature, stream):
+        """Mode 4 buffers output until evidence validation; errors never become summaries."""
+        from hot_topics.errors import HotModelError
+        if not self.api_key or self.api_key.startswith('<'):
+            raise HotModelError("missing_model_key", "请在 config_private.py 配置 DEEPSEEK_API_KEY")
+        messages = []
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
+        messages.append({"role": "user", "content": user_message})
+        from urllib.parse import urlparse
+        default_thinking = 'disabled' if urlparse(self.api_base).hostname == 'api.deepseek.com' else None
+        thinking = getattr(_config, 'HOT_THINKING', default_thinking)
+        if thinking not in (None, 'enabled', 'disabled'):
+            raise HotModelError('invalid_thinking', 'HOT_THINKING 必须为 enabled、disabled 或 None')
+        payload = {"model": self.model, "messages": messages, "temperature": temperature,
+                   "max_tokens": MAX_RESPONSE_TOKENS, "stream": stream}
+        if thinking is not None:
+            payload['thinking'] = {'type': thinking}
+        response = None
+        try:
+            response = requests.post(
+                f"{self.api_base}/chat/completions",
+                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=120 if stream else 60, stream=stream,
+            )
+            response.raise_for_status()
+            if stream:
+                pieces, done, finish = [], False, None
+                for line in response.iter_lines():
+                    if not line or not line.startswith(b'data:'):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == b'[DONE]':
+                        done = True
+                        break
+                    chunk = json.loads(payload)
+                    if chunk.get('error'):
+                        raise ValueError('provider error')
+                    for choice in chunk.get('choices', []):
+                        if choice.get('finish_reason'):
+                            finish = choice['finish_reason']
+                        content = choice.get('delta', {}).get('content')
+                        if content:
+                            pieces.append(content)
+                text = ''.join(pieces)
+                if finish == 'length':
+                    raise HotModelError('output_token_limit', '输出达到 MAX_RESPONSE_TOKENS 上限（包含推理消耗）；请提高上限后重放')
+                if not done or finish != 'stop' or not text.strip():
+                    raise ValueError('incomplete generation')
+                return text
+            choice = response.json()['choices'][0]
+            text = choice['message']['content']
+            if choice.get('finish_reason') == 'length':
+                raise HotModelError('output_token_limit', '输出达到 MAX_RESPONSE_TOKENS 上限；请提高上限后重放')
+            if choice.get('finish_reason') != 'stop' or not text or not text.strip():
+                raise ValueError('incomplete generation')
+            return text
+        except HotModelError:
+            raise
+        except Exception:
+            raise HotModelError("model_request_failed", "DeepSeek 请求失败或输出不完整；请检查模型配置、网络和响应长度") from None
+        finally:
+            if response is not None:
+                response.close()
+
+    def mode_hot_topics(self, hours=None, only_export=None, replay=None):
+        """Mode 4: one report per invocation, with local evidence exported first."""
+        from hot_topics.config import HotConfig
+        from hot_topics.service import run_hot_topics, replay_hot_topics
+        config = HotConfig.from_module(_config, hours=hours, only_export=only_export)
+        progress = self.info_callback or (lambda message: print(AGENT_PREFIX + message))
+        llm = lambda user, system: self.call_deepseek(user, system, temperature=0.2, strict=True)
+        if replay:
+            result = replay_hot_topics(replay, llm, config, progress=progress)
+        else:
+            result = run_hot_topics(self.client, llm, config, progress=progress)
+        print(result['answer'])
+        print(f"\n{AGENT_PREFIX}状态: {result['status']}")
+        for key in ('data_path', 'sources_path', 'summary_path'):
+            print(f"{AGENT_PREFIX}{key}: {result[key]}")
+        return result
 
     def mode_manual_search(self, keyword: str, user_question: str) -> Dict[str, Any]:
         """
@@ -1076,17 +1152,29 @@ class TreeholeRAGAgent:
             print("  1 - 手动输入关键词检索")
             print("  2 - LLM自动生成关键词检索")
             print("  3 - LLM自动课程测评分析")
+            print("  4 - 热点实时推送（单次生成）")
             print("  q - 退出\n")
-            mode = input("请选择模式 (1/2/3/q): ").strip()
+            mode = input("请选择模式 (1/2/3/4/q): ").strip()
             
             if mode == 'q':
                 print(f"{AGENT_PREFIX}正在退出...")
                 break
             
-            if mode not in ['1', '2', '3']:
+            if mode not in ['1', '2', '3', '4']:
                 print(f"{AGENT_PREFIX}无效选择，请重试")
                 continue
             
+            if mode == '4':
+                raw = input("时间范围（24/72/168 小时，回车默认24）: ").strip() or '24'
+                if raw not in ('24', '72', '168'):
+                    print(f"{AGENT_PREFIX}请输入 24、72 或 168")
+                    continue
+                try:
+                    self.mode_hot_topics(hours=int(raw))
+                except Exception as exc:
+                    print(f"{AGENT_PREFIX}热点运行失败: {type(exc).__name__}；请检查配置与依赖")
+                continue
+
             if mode == '3':
                 # Course review mode
                 course_abbr = input("\n请输入课程缩写（如：计网、操统）: ").strip()
@@ -1119,17 +1207,29 @@ class TreeholeRAGAgent:
 
 
 def main():
-    """Main entry point."""
+    """Interactive menu by default; optional one-shot diagnostics and offline replay."""
+    import argparse
+    parser = argparse.ArgumentParser(description="PKU Treehole RAG Agent")
+    parser.add_argument('--hot', action='store_true', help='直接运行模式4')
+    parser.add_argument('--hot-only', action='store_true', default=None, help='只采集并导出，不调用模型')
+    parser.add_argument('--hot-hours', type=int, choices=(24, 72, 168), default=None)
+    parser.add_argument('--hot-replay', metavar='POSTS_JSON', help='从已导出的 JSON 重新总结，无需树洞登录')
+    args = parser.parse_args()
     try:
-        agent = TreeholeRAGAgent()
+        agent = TreeholeRAGAgent(authenticate=not bool(args.hot_replay))
+        if args.hot or args.hot_only or args.hot_replay or args.hot_hours is not None:
+            result = agent.mode_hot_topics(hours=args.hot_hours, only_export=args.hot_only,
+                                           replay=args.hot_replay)
+            return 1 if result['status'] in ('summary_failed', 'collection_failed') else 0
         agent.interactive_mode()
+        return 0
     except KeyboardInterrupt:
         print("\n\n[Agent] 程序被用户中断")
-    except Exception as e:
-        print(f"\n[Agent] 错误: {e}")
-        import traceback
-        traceback.print_exc()
+        return 130
+    except Exception as exc:
+        print(f"\n[Agent] 错误: {exc}")
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
