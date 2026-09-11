@@ -14,12 +14,12 @@ class CLITests(unittest.TestCase):
         obj.info_callback = obj.stream_callback = None
         return obj
 
-    def test_mode_four_dispatches_72_hours_and_returns_to_menu(self):
+    def test_mode_four_dispatches_8_hours_and_returns_to_menu(self):
         obj = self.bare_agent()
-        with patch('builtins.input', side_effect=['4', '72', 'q']), redirect_stdout(io.StringIO()):
+        with patch('builtins.input', side_effect=['4', '8', 'q']), redirect_stdout(io.StringIO()):
             with patch.object(obj, 'mode_hot_topics', return_value={'status': 'exported'}) as run:
                 obj.interactive_mode()
-        self.assertEqual(run.call_args.kwargs['hours'], 72)
+        self.assertEqual(run.call_args.kwargs['hours'], 8)
 
     def test_invalid_hot_hours_do_not_invoke_service(self):
         obj = self.bare_agent()
@@ -111,3 +111,19 @@ class CLITests(unittest.TestCase):
             result = obj.call_deepseek('prompt', strict=True)
         self.assertEqual(result, 'ok [#7]')
         self.assertEqual(buffer.getvalue(), '')
+
+    def test_mode_four_freezes_cutoff_before_duration_prompt(self):
+        obj = self.bare_agent()
+        with patch('agent.time.time', return_value=123456), patch('builtins.input', side_effect=['4', '12', 'q']), redirect_stdout(io.StringIO()) as output:
+            with patch.object(obj, 'mode_hot_topics', return_value={}) as run:
+                obj.interactive_mode()
+        self.assertEqual(run.call_args.kwargs['now'], 123456)
+        self.assertIn('截止时间', output.getvalue())
+
+    def test_only_new_windows_are_accepted(self):
+        from hot_topics.config import HotConfig
+        for hours in (4, 8, 12, 24):
+            self.assertEqual(HotConfig(hours=hours).hours, hours)
+        for hours in (72, 168):
+            with self.assertRaises(ValueError):
+                HotConfig(hours=hours)

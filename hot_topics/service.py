@@ -9,7 +9,7 @@ from uuid import uuid4
 from .collect import collect_recent, collect_comments
 from .ranking import rank_posts
 from .errors import HotModelError
-from .report import atomic_write, save_bundle, render_sources, report_header, summarize, SummaryError
+from .report import atomic_write, save_bundle, render_sources, report_header, summarize, SummaryError, _stamp
 
 
 def _export_and_summarize(bundle, llm, config, progress):
@@ -55,6 +55,7 @@ def _export_and_summarize(bundle, llm, config, progress):
 
 def run_hot_topics(client, llm, config, now=None, progress=print):
     now = int(time.time() if now is None else now)
+    progress(f'统计窗口：{_stamp(now - config.hours * 3600)} 至 {_stamp(now)}')
     progress(f'扫描最近 {config.hours} 小时帖子，最多扫描 {config.max_scan_posts} 条')
     posts, scan = collect_recent(client, config, now, progress=progress)
     selected, keywords = rank_posts(posts, config, now)
@@ -73,8 +74,6 @@ def replay_hot_topics(path, llm, config, progress=print):
     if bundle.get('schema_version') != 1 or not isinstance(bundle.get('posts'), list) or not isinstance(bundle.get('scan'), dict):
         raise ValueError('不是有效的热点导出 JSON（schema_version=1）')
     # Keep original window/ranking config as provenance; current config controls only generation.
-    from dataclasses import replace
-    config = replace(config, hours=bundle['config']['hours'])
     bundle['replayed_from'] = str(Path(path).expanduser().resolve())
     bundle['generation_config'] = asdict(config)
     for name in ('answer', 'summary_error', 'summary_error_code', 'summary_info', 'rejected_drafts', 'evidence_notes'):

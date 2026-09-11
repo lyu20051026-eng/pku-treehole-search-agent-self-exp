@@ -108,3 +108,42 @@ class ReportTests(unittest.TestCase):
                 max_scan_posts=1, only_export=True, request_delay=0), now=100000)
             self.assertEqual(result['status'], 'exported')
             self.assertIn('部分', Path(result['sources_path']).read_text())
+
+    def test_explicit_citation_variants_are_normalized_but_unknown_ids_rejected(self):
+        from hot_topics.report import normalize_citations
+        text = normalize_citations('出处（#7/3、#7）与 [#7, #999]')
+        self.assertEqual(text, '出处[#7/3][#7]与 [#7][#999]')
+        with self.assertRaises(ValueError):
+            validate_citations(text, {'7', '7/3'})
+
+    def test_final_can_cite_owner_of_comment_in_notes_without_allowing_other_posts(self):
+        from hot_topics.report import summarize
+        from unittest.mock import patch
+        bundle = {'posts': [], 'scan': {'in_window': 2, 'complete': True}}
+        chunks = [('first', {'7', '7/3'}), ('second', {'8', '8/4', '9'})]
+        replies = iter(['评论（#7/3）', '评论（#8/4）', '归纳 [#7] [#8]'])
+        with patch('hot_topics.report._pack_evidence', return_value=chunks):
+            answer, info = summarize(bundle, lambda u,s: next(replies), HotConfig(), lambda s: None)
+        self.assertEqual(answer, '归纳 [#7] [#8]')
+        self.assertEqual(info['repair_calls'], 0)
+        replies = iter(['评论 [#7/3]', '评论 [#8/4]', '误引 [#9]', '仍误引 [#9]'])
+        with patch('hot_topics.report._pack_evidence', return_value=chunks):
+            with self.assertRaises(ValueError):
+                summarize(bundle, lambda u,s: next(replies), HotConfig(), lambda s: None)
+
+    def test_legacy_window_replay_keeps_original_scope(self):
+        for hours in (72, 168):
+            with tempfile.TemporaryDirectory() as d:
+                result = run_hot_topics(self.client(), None, HotConfig(output_dir=d,
+                    request_delay=0, only_export=True), now=100000, progress=lambda s: None)
+                path = Path(result['data_path'])
+                bundle = json.loads(path.read_text())
+                bundle['config']['hours'] = hours
+                bundle['scan']['window_start'] = bundle['scan']['window_end'] - hours*3600
+                path.write_text(json.dumps(bundle))
+                def llm(user, system):
+                    self.assertIn(f'窗口 {hours} 小时', user)
+                    return '历史总结 [#7]'
+                replay = replay_hot_topics(path, llm, HotConfig(output_dir=d), progress=lambda s: None)
+                self.assertEqual(replay['status'], 'completed')
+                self.assertEqual(json.loads(Path(replay['data_path']).read_text())['config']['hours'], hours)
