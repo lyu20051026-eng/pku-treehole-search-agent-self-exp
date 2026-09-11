@@ -103,6 +103,19 @@ def evidence_chunks(posts, limit):
     return [text for text, allowed in _pack_evidence(posts, limit)]
 
 
+def normalize_citations(text):
+    """Canonicalize explicit citation groups; never guess or replace source IDs."""
+    pattern = r'[（(\[【]\s*(#\d+(?:/\d+)?(?:\s*[,，、;；]\s*#\d+(?:/\d+)?)*)\s*[）)\]】]'
+    return re.sub(pattern, lambda m: ''.join('[#' + ref + ']' for ref in
+                  re.findall(r'#(\d+(?:/\d+)?)', m.group(1))), text)
+
+
+def note_sources(text, structural_sources):
+    """A cited comment also identifies its owning post, but no sibling comments."""
+    cited = set(CITATION.findall(text)) & structural_sources
+    return (cited | {ref.split('/')[0] for ref in cited}) & structural_sources
+
+
 def validate_citations(text, allowed):
     cited = set(CITATION.findall(text or ''))
     if not cited or not cited <= allowed:
@@ -141,7 +154,7 @@ def summarize(bundle, llm, config, progress):
                 progress('纠正或压缩一份笔记/总结')
             info['model_calls'] += 1
             try:
-                draft = llm(prompt + feedback, SYSTEM)
+                draft = normalize_citations(llm(prompt + feedback, SYSTEM))
             except HotModelError as exc:
                 if exc.code != 'output_token_limit' or attempt:
                     raise
@@ -196,7 +209,7 @@ def summarize(bundle, llm, config, progress):
         reduced = []
         for group in groups:
             note = checked_call('合并以下证据笔记为至多 400 字，保留出处、关键限制和分歧。\n\n'+group,
-                                set(CITATION.findall(group)), 'reduction')
+                                note_sources(group, all_allowed), 'reduction')
             reduced.append(note)
             info['note_calls'] += 1
         if len('\n\n'.join(reduced)) >= len('\n\n'.join(notes)):
@@ -206,13 +219,14 @@ def summarize(bundle, llm, config, progress):
     bundle['evidence_notes'] = notes
     evidence = '\n\n'.join(notes)
     scan = bundle['scan']
-    scope = (f"窗口 {config.hours} 小时；候选 {scan['in_window']} 帖；入选 {len(bundle['posts'])} 帖；"
+    hours = bundle.get('config', {}).get('hours', config.hours)
+    scope = (f"窗口 {hours} 小时；候选 {scan['in_window']} 帖；入选 {len(bundle['posts'])} 帖；"
              f"窗口枚举完成={scan['complete']}；模型素材覆盖 {info['used_chunks']}/{info['total_chunks']} 块。")
     prompt = ('请输出近期树洞热点总结。按话题归并，目标 5～10 个话题，证据不足就减少，不凑数。'
               '每个话题提供简短概述、热度依据、评论主要观点与分歧及出处。不要用相同内容凑多个话题。'
               '整份报告控制在 1500 字以内（含引用），每话题最多两个最直接出处，不逐条复述所有评论。'
               '补充样本不能声称达到热点门槛；明确采集与素材覆盖限制。\n'+scope+'\n\n'+evidence)
     progress('生成近期树洞热点总结')
-    answer = checked_call(prompt, (set(CITATION.findall(evidence)) & all_allowed)
+    answer = checked_call(prompt, note_sources(evidence, all_allowed)
                           if len(chunks) > 1 else all_allowed, 'final')
     return answer, info

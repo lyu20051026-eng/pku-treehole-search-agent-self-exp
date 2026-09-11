@@ -171,3 +171,13 @@ class ClientTests(unittest.TestCase):
     def test_invalid_window_rejected(self):
         with self.assertRaises(ValueError):
             HotConfig(hours=0)
+
+    def test_new_windows_filter_exact_start_and_fixed_end(self):
+        for hours in (4, 8, 12, 24):
+            now = 200000
+            start = now - hours * 3600
+            client = Pages([response([post(1, start-1), post(2, start),
+                post(3, now), post(4, now+1)]), response([])])
+            rows, meta = collect_recent(client, HotConfig(hours=hours, request_delay=0), now=now)
+            self.assertEqual([p['pid'] for p in rows], [2, 3])
+            self.assertEqual((meta['window_start'], meta['window_end']), (start, now))

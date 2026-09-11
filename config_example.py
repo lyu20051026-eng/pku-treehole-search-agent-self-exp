@@ -56,7 +56,7 @@ CACHE_DIR = "data/cache"
 CACHE_EXPIRATION = 86400
 # ==================== Mode 4: One-shot hot topics ====================
 # Optional: old config_private.py files continue to work without these settings.
-HOT_HOURS = 24                    # 24 / 72 / 168 (7 days)
+HOT_HOURS = 24                    # 4 / 8 / 12 / 24
 HOT_TOP_POSTS = 30                # Final selected posts, NOT the scan size
 HOT_MAX_SCAN_POSTS = 5000          # Partial coverage is reported if this cap is reached
 HOT_MAX_SCAN_PAGES = 200

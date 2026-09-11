@@ -477,8 +477,9 @@ class TreeholeRAGAgent:
             if response is not None:
                 response.close()
 
-    def mode_hot_topics(self, hours=None, only_export=None, replay=None):
+    def mode_hot_topics(self, hours=None, only_export=None, replay=None, now=None):
         """Mode 4: one report per invocation, with local evidence exported first."""
+        now = int(time.time()) if now is None else now
         from hot_topics.config import HotConfig
         from hot_topics.service import run_hot_topics, replay_hot_topics
         config = HotConfig.from_module(_config, hours=hours, only_export=only_export)
@@ -487,7 +488,7 @@ class TreeholeRAGAgent:
         if replay:
             result = replay_hot_topics(replay, llm, config, progress=progress)
         else:
-            result = run_hot_topics(self.client, llm, config, progress=progress)
+            result = run_hot_topics(self.client, llm, config, now=now, progress=progress)
         print(result['answer'])
         print(f"\n{AGENT_PREFIX}状态: {result['status']}")
         for key in ('data_path', 'sources_path', 'summary_path'):
@@ -1165,12 +1166,15 @@ class TreeholeRAGAgent:
                 continue
             
             if mode == '4':
-                raw = input("时间范围（24/72/168 小时，回车默认24）: ").strip() or '24'
-                if raw not in ('24', '72', '168'):
-                    print(f"{AGENT_PREFIX}请输入 24、72 或 168")
+                now = int(time.time())
+                from hot_topics.report import _stamp
+                print(f"{AGENT_PREFIX}本次统计截止时间：{_stamp(now)}")
+                raw = input("时间范围（4/8/12/24 小时，回车默认24）: ").strip() or '24'
+                if raw not in ('4', '8', '12', '24'):
+                    print(f"{AGENT_PREFIX}请输入 4、8、12 或 24")
                     continue
                 try:
-                    self.mode_hot_topics(hours=int(raw))
+                    self.mode_hot_topics(hours=int(raw), now=now)
                 except Exception as exc:
                     print(f"{AGENT_PREFIX}热点运行失败: {type(exc).__name__}；请检查配置与依赖")
                 continue
@@ -1212,7 +1216,7 @@ def main():
     parser = argparse.ArgumentParser(description="PKU Treehole RAG Agent")
     parser.add_argument('--hot', action='store_true', help='直接运行模式4')
     parser.add_argument('--hot-only', action='store_true', default=None, help='只采集并导出，不调用模型')
-    parser.add_argument('--hot-hours', type=int, choices=(24, 72, 168), default=None)
+    parser.add_argument('--hot-hours', type=int, choices=(4, 8, 12, 24), default=None)
     parser.add_argument('--hot-replay', metavar='POSTS_JSON', help='从已导出的 JSON 重新总结，无需树洞登录')
     args = parser.parse_args()
     try:

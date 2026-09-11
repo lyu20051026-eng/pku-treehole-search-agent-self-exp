@@ -25,8 +25,8 @@ class HotConfig:
     only_export: bool = False
 
     def __post_init__(self):
-        if self.hours not in (24, 72, 168):
-            raise ValueError('时间范围必须为 24、72 或 168 小时')
+        if self.hours not in (4, 8, 12, 24):
+            raise ValueError('时间范围必须为 4、8、12 或 24 小时')
         for name in ('top_posts', 'page_size', 'max_scan_posts', 'max_scan_pages',
                      'max_comment_pages', 'max_retries', 'min_keyword_posts',
                      'context_chars', 'max_summary_chunks'):
